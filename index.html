@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>墨城贪吃蛇 · Snake</title>
+  <style>
+    :root{--bg:#0B1020;--ink:#EAF3FF;--ring:#2B3257;--pri:#00C2A8;--acc:#7C3AED}
+    *{box-sizing:border-box} html,body{height:100%} body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto}
+    .wrap{max-width:900px;margin:0 auto;padding:16px}
+    .bar{display:flex;align-items:center;gap:10px}
+    .logo{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:conic-gradient(from 180deg,var(--pri),#47E5D2,var(--pri));font-weight:900;color:#032b25}
+    .chip{margin-left:auto;border:1px solid var(--ring);padding:8px 12px;border-radius:999px}
+    .board{margin-top:14px;border:1px solid var(--ring);border-radius:16px;padding:12px;background:linear-gradient(180deg,#0F1430,#0B1026);position:relative}
+    #c{display:block;margin:0 auto;border-radius:12px;background:#0A0F25;box-shadow:inset 0 0 0 1px rgba(255,255,255,.03)}
+    .row{display:flex;gap:8px;margin-top:12px;justify-content:center}
+    .btn{background:linear-gradient(180deg,#14D4BE,#00C2A8);color:#00100C;border:none;border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer}
+    .btn-ghost{background:transparent;border:1px solid #3A416D;color:#CFE;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
+    .hint{font-size:12px;color:#9CA3AF;text-align:center;margin-top:10px}
+    .touch{display:grid;grid-template:repeat(3,56px)/repeat(3,56px);gap:10px;place-content:center;margin:12px auto}
+    .key{border:1px solid #3A416D;border-radius:12px;display:grid;place-items:center;color:#CFE}
+    .key.active{outline:2px solid var(--pri)}
+    .modal{position:fixed;inset:0;display:none;place-items:center;background:rgba(2,6,18,.55);backdrop-filter:blur(6px)}
+    .modal.show{display:grid}
+    .card{width:min(92vw,480px);background:linear-gradient(180deg,#0E1330,#0A0F25);border:1px solid #2E3664;border-radius:18px;padding:18px}
+    .title{font-size:22px;font-weight:900;margin:0 0 10px;background:linear-gradient(90deg,#B48CFF,#5CF0E1,#B48CFF);-webkit-background-clip:text;background-clip:text;color:transparent}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="bar">
+      <div class="logo">MM</div>
+      <div>
+        <div style="font-weight:900">墨城贪吃蛇 · Snake</div>
+        <div style="color:#9CA3AF;font-size:13px">上手快、男女都爱玩的解压小游戏</div>
+      </div>
+      <div class="chip" id="scoreChip">得分：0</div>
+    </div>
+
+    <div class="board">
+      <canvas id="c" width="600" height="600" aria-label="贪吃蛇游戏画布"></canvas>
+      <div class="row">
+        <button class="btn" id="btnStart">开始/暂停</button>
+        <button class="btn-ghost" id="btnRestart">重开</button>
+        <button class="btn-ghost" id="btnSlow">减速</button>
+        <button class="btn-ghost" id="btnFast">加速</button>
+      </div>
+      <div class="touch" id="touch">
+        <div></div><div class="key" data-k="ArrowUp">↑</div><div></div>
+        <div class="key" data-k="ArrowLeft">←</div><div class="key" data-k="Pause">●</div><div class="key" data-k="ArrowRight">→</div>
+        <div></div><div class="key" data-k="ArrowDown">↓</div><div></div>
+      </div>
+      <div class="hint">电脑：方向键移动 · 空格/回车暂停/开始 ｜ 手机：点虚拟方向键</div>
+    </div>
+
+    <p class="hint">可选：在代码顶部填上你的 API 地址，就能把分数上报到 Wix/Velo 或 Vercel Serverless。</p>
+  </div>
+
+  <div class="modal" id="over">
+    <div class="card">
+      <div class="title">💥 Game Over</div>
+      <div id="overText" style="color:#C8D1FF;margin-bottom:10px">得分 0 · 最长 3 节</div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn-ghost" onclick="location.reload()">再来一局</button>
+        <button class="btn" id="btnClaim">去领奖中心</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ====== 配置（可接入你的后端） ====== */
+const CONFIG = {
+  GRID: 20,              // 方格大小（像素）
+  SPEED_INIT: 130,       // 初始速度（越小越快，ms）
+  SPEED_MIN: 60,
+  SPEED_MAX: 220,
+  CLAIM_URL: "#",        // 领奖中心链接
+  API_POINTS_URL: "",    // 可填：例如 https://你的域名/_functions/addpoints
+  API_TOKEN: ""          // 如果需要鉴权，填你的 token
+};
+
+/* ====== 变量 ====== */
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+const scoreChip = document.getElementById('scoreChip');
+const modal = document.getElementById('over');
+const overText = document.getElementById('overText');
+const btnClaim = document.getElementById('btnClaim');
+
+let w = cvs.width, h = cvs.height, G = CONFIG.GRID;
+let running = false, timer = null, speed = CONFIG.SPEED_INIT;
+let dir = 'Right', nextDir = 'Right';
+let snake = [], food = null, score = 0, best = +(localStorage.getItem('snake_best')||0);
+
+/* ====== 工具 ====== */
+function rnd(n){ return Math.floor(Math.random()*n); }
+function drawCell(x,y,color){ ctx.fillStyle=color; ctx.fillRect(x*G, y*G, G-1, G-1); }
+function placeFood(){
+  while(true){
+    const f = { x:rnd(w/G), y:rnd(h/G) };
+    if(!snake.some(s=>s.x===f.x && s.y===f.y)){ food = f; return; }
+  }
+}
+function reset(){
+  speed = CONFIG.SPEED_INIT;
+  dir = nextDir = 'Right';
+  snake = [{x:5,y:10},{x:4,y:10},{x:3,y:10}];
+  score = 0;
+  placeFood();
+  draw();
+}
+function setScore(n){
+  score = n; scoreChip.textContent = `得分：${n}`;
+  if(n>best){ best=n; localStorage.setItem('snake_best', best); }
+}
+function draw(){
+  ctx.clearRect(0,0,w,h);
+  // 网格微光
+  ctx.strokeStyle = 'rgba(44,51,95,.25)'; ctx.lineWidth = 1;
+  for(let x=0;x<w;x+=G){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+  for(let y=0;y<h;y+=G){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+  // 食物
+  if(food){ drawCell(food.x, food.y, '#FFD76A'); }
+  // 蛇
+  snake.forEach((s,i)=> drawCell(s.x, s.y, i===0 ? '#00C2A8' : '#7C3AED'));
+}
+function step(){
+  dir = nextDir;
+  const head = { ...snake[0] };
+  if(dir==='Up') head.y -= 1;
+  if(dir==='Down') head.y += 1;
+  if(dir==='Left') head.x -= 1;
+  if(dir==='Right') head.x += 1;
+
+  // 碰墙
+  if(head.x<0 || head.y<0 || head.x>=w/G || head.y>=h/G){ return gameOver(); }
+  // 撞自己
+  if(snake.some(s=>s.x===head.x && s.y===head.y)){ return gameOver(); }
+
+  snake.unshift(head);
+
+  // 吃食物
+  if(food && head.x===food.x && head.y===food.y){
+    setScore(score+10);
+    placeFood();
+    // 加速一点点
+    speed = Math.max(CONFIG.SPEED_MIN, speed-4);
+  }else{
+    snake.pop();
+  }
+
+  draw();
+}
+function loop(){
+  if(!running) return;
+  step();
+  timer = setTimeout(loop, speed);
+}
+function playPause(){
+  running = !running;
+  if(running){ loop(); } else { clearTimeout(timer); }
+}
+
+/* ====== 操作 ====== */
+function setDir(newDir){
+  const opp = {Up:'Down', Down:'Up', Left:'Right', Right:'Left'};
+  if(opp[dir]===newDir) return; // 禁反向
+  nextDir = newDir;
+}
+document.addEventListener('keydown', (e)=>{
+  const k = e.key;
+  if(k==='ArrowUp') setDir('Up');
+  if(k==='ArrowDown') setDir('Down');
+  if(k==='ArrowLeft') setDir('Left');
+  if(k==='ArrowRight') setDir('Right');
+  if(k===' '||k==='Enter'){ playPause(); }
+});
+
+document.getElementById('btnStart').onclick = playPause;
+document.getElementById('btnRestart').onclick = ()=>{ clearTimeout(timer); reset(); running=false; draw(); }
+document.getElementById('btnFast').onclick = ()=> speed = Math.max(CONFIG.SPEED_MIN, speed-10);
+document.getElementById('btnSlow').onclick = ()=> speed = Math.min(CONFIG.SPEED_MAX, speed+10);
+
+// 触控方向键
+document.querySelectorAll('.key').forEach(el=>{
+  el.addEventListener('touchstart',(e)=>{ e.preventDefault(); el.classList.add('active'); const k=el.dataset.k;
+    if(k==='Pause') return playPause();
+    if(k==='ArrowUp') setDir('Up');
+    if(k==='ArrowDown') setDir('Down');
+    if(k==='ArrowLeft') setDir('Left');
+    if(k==='ArrowRight') setDir('Right');
+  },{passive:false});
+  el.addEventListener('touchend',()=> el.classList.remove('active'));
+});
+
+/* ====== 结束、上报 & 领奖 ====== */
+async function gameOver(){
+  running=false; clearTimeout(timer);
+  overText.textContent = `得分 ${score} · 历史最佳 ${best}`;
+  modal.classList.add('show');
+  // 可选：把分数上报到你的后端（示例：Wix/Velo 或 Vercel Serverless）
+  if(CONFIG.API_POINTS_URL){
+    try{
+      await fetch(CONFIG.API_POINTS_URL, {
+        method:'POST',
+        headers:{'Content-Type':'application/json', ...(CONFIG.API_TOKEN?{Authorization:`Bearer ${CONFIG.API_TOKEN}`}:{})},
+        body: JSON.stringify({ delta: score })
+      });
+    }catch(e){}
+  }
+}
+btnClaim.onclick = ()=> location.href = CONFIG.CLAIM_URL || '#';
+
+/* ====== 启动 ====== */
+reset(); draw();
+</script>
+</body>
+</html>
