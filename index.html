@@ -145,7 +145,7 @@ const CFG = {
   SPEED_MAX: 200,
   TURN_RATE: Math.PI/1.2,     // 键盘/自动转向的最大角速度（弧度/秒）
   SEG_LEN: 16,                // 段间距（像素，视觉更圆润）
-  GROW_SEG: 8,                // 每次吃到增长的段数
+  GROW_SEG: 10,               // 每次吃到增长的段数
   HEAD_RADIUS: 9,             // 头部半径（像素；会随 DPR 放大）
   BODY_RADIUS: 7,
   EAT_RADIUS: 16,             // 吃判定半径
@@ -153,7 +153,13 @@ const CFG = {
   WALL_WARN_PIX: 40,          // 边缘警告距离（像素）
   CLAIM_URL: "#",
   SHARE_TITLE: "360° 连续转向的墨城贪吃蛇！",
-  SHARE_TEXT: "可穿墙，但别咬到自己～更慢更稳更顺滑。"
+  SHARE_TEXT: "可穿墙，但别咬到自己～更慢更稳更顺滑。",
+  PARTICLE_COUNT: 42,         // 爆炸粒子数量
+  PARTICLE_SPEED_MIN: 160,
+  PARTICLE_SPEED_MAX: 380,
+  PARTICLE_DRAG: 0.92,
+  PARTICLE_LIFE_MIN: 0.38,
+  PARTICLE_LIFE_MAX: 0.78,
 };
 
 /* ================= 画布 & DPR ================= */
@@ -201,6 +207,7 @@ let score = 0, best = +(localStorage.getItem('snake_best')||0);
 let shake = 0;                      // 震动
 let lastTs = 0;
 let glowTimer = null;
+let particles = [];
 
 /* ================= 工具 ================= */
 const TAU = Math.PI*2;
@@ -222,13 +229,10 @@ function reset(){
   const cx = view.w/2, cy = view.h/2;
   angle = targetAngle = 0;
   snake.length = 0;
-  // 初始长度
-  const initLen = 24;
-  for(let i=0;i<initLen;i++){
-    snake.push({ x: cx - i*CFG.SEG_LEN, y: cy });
-  }
+  snake.push({ x: cx, y: cy });
   score = 0; setScore(0);
   growLeft = 0; shake = 0;
+  particles.length = 0;
   randFood();
   draw(); drawDanger(0);
 }
@@ -253,9 +257,10 @@ function setScore(n){
 
 /* ================= 主循环（rAF，基于真实时间） ================= */
 function tick(ts){
-  if(!running){ lastTs = ts; draw(); return requestAnimationFrame(tick); }
-  const dt = Math.min(40, (ts - lastTs)) / 1000; // s
+  const delta = lastTs ? Math.min(40, ts - lastTs) : 16;
+  const dt = delta / 1000; // s
   lastTs = ts;
+  if(!running){ updateParticles(dt); draw(); return requestAnimationFrame(tick); }
 
   // 键盘/摇杆朝向 → 平滑旋转到 targetAngle
   const diff = normalizeAngle(targetAngle - angle);
@@ -274,8 +279,10 @@ function tick(ts){
   const prev = snake[0];
   const dx = newHead.x - prev.x, dy = newHead.y - prev.y;
   const d = Math.hypot(dx,dy);
+  let insertedHead = false;
   if(d > CFG.SEG_LEN*0.6){
     snake.unshift(newHead);
+    insertedHead = true;
   }else{
     // 微步：保持平滑
     prev.x = newHead.x; prev.y = newHead.y;
@@ -294,20 +301,10 @@ function tick(ts){
     }
     acc += dd;
   }
-  // 控制总段数：吃到时增加段
-  if(growLeft>0){
-    const tail = snake[snake.length-1];
-    const pre = snake[snake.length-2];
-    const vx = tail.x - pre.x, vy = tail.y - pre.y;
-    const len = Math.hypot(vx,vy) || 1;
-    snake.push({ x: tail.x + (vx/len)*CFG.SEG_LEN, y: tail.y + (vy/len)*CFG.SEG_LEN });
-    growLeft--;
-  }else{
-    // 正常修剪
-    while(snake.length>2){
-      const a=snake[snake.length-2], b=snake[snake.length-1];
-      const dd = Math.hypot(a.x-b.x, a.y-b.y);
-      if(dd < CFG.SEG_LEN*0.9) break;
+  if(insertedHead){
+    if(growLeft>0){
+      growLeft--;
+    }else if(snake.length>1){
       snake.pop();
     }
   }
@@ -317,11 +314,14 @@ function tick(ts){
   if(dist2(snake[0], food) < eatR2){
     setScore(score+10);
     growLeft += CFG.GROW_SEG;
+    spawnBurst(food.x, food.y);
     randFood();
     shake = 3; // 轻微震动
   }else{
     shake = Math.max(0, shake - dt*8);
   }
+
+  updateParticles(dt);
 
   // 自撞（跳过前 SELF_HIT_SKIP 段）
   const headR2 = (CFG.HEAD_RADIUS*1.15*DPR)**2;
@@ -390,6 +390,25 @@ function draw(){
   ctx.fillStyle=g; ctx.beginPath(); ctx.arc(food.x,food.y, fr*3, 0, TAU); ctx.fill();
   ctx.fillStyle='#FFD76A'; ctx.beginPath(); ctx.arc(food.x,food.y, fr, 0, TAU); ctx.fill();
 
+  // 粒子特效
+  if(particles.length){
+    ctx.save();
+    ctx.globalCompositeOperation='lighter';
+    for(const p of particles){
+      const life = 1 - p.age/p.life;
+      const r = p.radius * DPR * (0.7 + 0.3*life);
+      const grad = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r);
+      grad.addColorStop(0,`rgba(255,255,255,${0.55*life})`);
+      grad.addColorStop(0.4,`rgba(255,215,106,${0.65*life})`);
+      grad.addColorStop(1,'rgba(124,58,237,0)');
+      ctx.fillStyle=grad;
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,r,0,TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   if(!snake.length) return;
 
   // 蛇体（渐变发光描边）
@@ -435,6 +454,38 @@ function draw(){
   ctx.arc(ex + nx*side, ey + ny*side, Math.max(2, HR*0.18), 0, TAU);
   ctx.arc(ex - nx*side, ey - ny*side, Math.max(2, HR*0.18), 0, TAU);
   ctx.fill();
+}
+
+function spawnBurst(x,y){
+  if(particles.length > 800){ particles.splice(0, particles.length - 800); }
+  for(let i=0;i<CFG.PARTICLE_COUNT;i++){
+    const angle = Math.random()*TAU;
+    const speed = CFG.PARTICLE_SPEED_MIN + Math.random()*(CFG.PARTICLE_SPEED_MAX-CFG.PARTICLE_SPEED_MIN);
+    particles.push({
+      x,
+      y,
+      vx: Math.cos(angle)*speed,
+      vy: Math.sin(angle)*speed,
+      life: CFG.PARTICLE_LIFE_MIN + Math.random()*(CFG.PARTICLE_LIFE_MAX-CFG.PARTICLE_LIFE_MIN),
+      age: 0,
+      radius: 6 + Math.random()*7,
+    });
+  }
+}
+
+function updateParticles(dt){
+  if(!particles.length) return;
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.age += dt;
+    if(p.age>=p.life){ particles.splice(i,1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    wrap(p);
+    const drag = Math.pow(CFG.PARTICLE_DRAG, dt*60);
+    p.vx *= drag;
+    p.vy *= drag;
+  }
 }
 
 /* ================= 危险提示（靠近边缘时红晕） ================= */
